@@ -5,12 +5,11 @@
 #define SIM800_RST 4
 
 #define loadledpin 13
-#define ledpin 8
-#define ledpin_GND 6
+#define ledpin 6
+#define ledpin_GND 8
 #define button 12
 #define button_GND 10
 #define voltmeter_pin A0
-#define batteryQuantity 1
 
 String whiteListPhones = "+380674016509, +380675056266";   // Белый список телефонов
 String phoneNumber = "+380674016509";
@@ -25,8 +24,13 @@ long updatePeriod   = 60000;
 
 SoftwareSerial SIM800(SIM800_TX, SIM800_RX); // RX Arduino (TX SIM800L), TX Arduino (RX SIM800L)
 
+void ledPower(boolean status) {
+  ledStatus = status;
+  digitalWrite(ledpin, ledStatus);
+}
+
 byte voltage_measure() {
-  int volts = voltage / batteryQuantity * 100;
+  int volts = voltage * 100;
   if (volts > 387)
     return map(volts, 420, 387, 100, 77);
   else if ((volts <= 387) && (volts > 375) )
@@ -51,23 +55,23 @@ String waitResponse() {                         // Функция ожидани
     Serial.println("Timeout...");               // ... оповещаем об этом и...
   }
   _resp.trim();
-  return _resp;                                 // ... возвращаем результат. Пусто, если проблема
+  return _resp;                                 // ... возвращаем результат.
 }
 
 
-String sendATCommand(String cmd, bool waiting) {
+String sendATCommand(String cmd, boolean waiting) {
   String _resp = "";                            // Переменная для хранения результата
   Serial.println(">> " + cmd);                          // Дублируем команду в монитор порта
   SIM800.println(cmd);                          // Отправляем команду модулю
   if (waiting) {                                // Если необходимо дождаться ответа...
     _resp = waitResponse();                     // ... ждем, когда будет передан ответ
     // Если Echo Mode выключен (ATE0), то эти 3 строки можно закомментировать
-    if (_resp.startsWith(cmd)) {  // Убираем из ответа дублирующуюся команду
-      _resp = _resp.substring(_resp.indexOf("\r", cmd.length()) + 2);
-    }
-    Serial.println("<< " + _resp);                      // Дублируем ответ в монитор порта
+    //if (_resp.startsWith(cmd)) {  // Убираем из ответа дублирующуюся команду
+    //  _resp = _resp.substring(_resp.indexOf("\r", cmd.length()) + 2);
+    //}
+    Serial.println("<< " + _resp);              // Дублируем ответ в монитор порта
   }
-  return _resp;                                 // Возвращаем результат. Пусто, если проблема
+  return _resp;                                 // Возвращаем результат.
 }
 
 String uptime() {
@@ -92,7 +96,7 @@ String uptime() {
 
 String rssi() {
   // read the RSSI  AT+CSQ
-  uint8_t n = sendATCommand("AT+CSQ", true).substring(6,8).toInt();
+  uint8_t n = sendATCommand("AT+CSQ", true).substring(6, 8).toInt();
   int8_t r;
 
   Serial.print(n); Serial.print(": ");
@@ -132,25 +136,38 @@ void parseSMS(String msg) {                                   // Парсим SM
   msgphone = msgheader.substring(firstIndex, secondIndex);
 
   Serial.println("Phone: " + msgphone);                       // Выводим номер телефона
-  Serial.println("Message: " + msgbody);                      // Выводим текст SMS
+  Serial.println("Message:\n@@@\n" + msgbody + "\n@@@");                      // Выводим текст SMS
 
   if (msgphone.length() > 6 && whiteListPhones.indexOf(msgphone) > -1) { // Если телефон в белом списке, то...
-    //setLedState(msgbody, msgphone);                           // ...выполняем команду
-  }
-  else {
-    Serial.println("Unknown phonenumber");
+    // ...выполняем команду
+    if (msgbody.equalsIgnoreCase("LedOn")) {
+      ledPower(1);
+    } else if (msgbody.equalsIgnoreCase("LedOff")) {
+      ledPower(0);
+    } else if (msgbody.equalsIgnoreCase("Stat")) {
+      sendSMS(
+        (String) "Voltage: " + voltage_measure() + "%(" + voltage + "v),"
+        + " RSSI: " + rssi()
+        + ", Up time: " + uptime()
+        + ", Led: " + ledStatus
+        + "."
+        );
     }
+  } else {
+    Serial.println("Unknown phonenumber");
+  }
 }
 
-String getAGPS() {
-  String aGPS = "";
-sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"",true);
-sendATCommand("AT+SAPBR=3,1,\"APN\",\"www.kyivstar.net\"",true);
-Serial.println("getAGPS::"+sendATCommand("AT+SAPBR=1,1",true));
-Serial.println("getAGPS::"+sendATCommand("AT+SAPBR=2,1",true));
-Serial.println(aGPS = sendATCommand("AT+CIPGSMLOC=1,1",true));
-Serial.println("getAGPS::"+sendATCommand("AT+SAPBR=0,1",true)); 
-return aGPS;
+String getAGPS() {          //Оператор не передает координаты
+  //String aGPS = "";
+  //sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"", true);
+  //sendATCommand("AT+SAPBR=3,1,\"APN\",\"www.kyivstar.net\"", true);
+  //sendATCommand("AT+SAPBR=1,1", true);
+  //sendATCommand("AT+SAPBR=2,1", true);
+  //aGPS = sendATCommand("AT+CIPGSMLOC=1,1", true);
+  //sendATCommand("AT+SAPBR=0,1", true);
+  //return aGPS;
+  return "NULL";
 }
 
 void modemSetup() {
@@ -162,7 +179,27 @@ void modemSetup() {
 
   // Команды настройки модема при каждом запуске
   _response = sendATCommand("AT+CLIP=1", true);  // Включаем АОН
+  //AT+CMGF=1 формат SMS в текстовый формат (Text Mode)
+  /*
+    В готовых проектах, в целях экономии памяти МК рекомендуется использовать комбинацию параметров:
+    отключенный Echo Mode (ATE0),цифровой формат ответов модуля (ATV0) и цифровой код ошибок (AT+CMEE=1).
+    Для единовременной установки всех параметров можно выполнить следующую команду (&W от AT&W — сохранить):
+      ATE0V0+CMEE=1;&W
 
+    В образовательных целях и тестировании ПО:
+    включенный (по умолчанию) Echo Mode (ATE1), текстовый (по умолчанию) формат ответов модуля (ATV1)
+    и текстовый код ошибок (AT+CMEE=2).
+      ATE1V1+CMEE=2;&W
+  */
+
+}
+
+void resetModem(){
+  digitalWrite(SIM800_RST, HIGH);
+  delay(1000);
+  digitalWrite(SIM800_RST, LOW);
+  delay(3000);
+  sendATCommand("AT", true);
 }
 
 void pinSetup() {
@@ -172,6 +209,7 @@ void pinSetup() {
   pinMode(button_GND, OUTPUT);
   digitalWrite(button_GND, LOW);
   pinMode(button, INPUT_PULLUP);
+  pinMode(SIM800_RST, OUTPUT);
   delay(10);
 }
 
@@ -198,28 +236,27 @@ void loop() {
     digitalWrite(loadledpin, 1);
     do {
       _response = sendATCommand("AT+CMGL=\"REC UNREAD\",1", true);// Отправляем запрос чтения непрочитанных сообщений
-      if (_response.indexOf("+CMGL: ") > -1) {                    // Если есть хоть одно, получаем его индекс
+      if (_response.startsWith("+CMGL: ")) {                      // Если есть хоть одно, получаем его индекс
         int msgIndex = _response.substring(_response.indexOf("+CMGL: ") + 7, _response.indexOf("\"REC UNREAD\"", _response.indexOf("+CMGL: ")) - 1).toInt();
         char i = 0;                                               // Объявляем счетчик попыток
         do {
           i++;                                                    // Увеличиваем счетчик
           _response = sendATCommand("AT+CMGR=" + (String)msgIndex + ",1", true);  // Пробуем получить текст SMS по индексу
           _response.trim();                                       // Убираем пробелы в начале/конце
+
           if (_response.endsWith("OK")) {                         // Если ответ заканчивается на "ОК"
             if (!hasmsg) hasmsg = true;                           // Ставим флаг наличия сообщений для удаления
-            sendATCommand("AT+CMGR=" + (String)msgIndex, false);   // Делаем сообщение прочитанным
-            sendATCommand("\n", false);                            // Перестраховка - вывод новой строки
+            sendATCommand("AT+CMGR=" + (String)msgIndex, false);  // Делаем сообщение прочитанным
+            sendATCommand("\n", false);                           // Перестраховка - вывод новой строки
             parseSMS(_response);                                  // Отправляем текст сообщения на обработку
             break;                                                // Выход из do{}
-          }
-          else {                                                  // Если сообщение не заканчивается на OK
+          } else {                                                // Если сообщение не заканчивается на OK
             Serial.println ("Error answer");                      // Какая-то ошибка
             sendATCommand("\n", true);                            // Отправляем новую строку и повторяем попытку
           }
-        } while (i < 10);
+        } while (i < 3);
         break;
-      }
-      else {
+      } else {
         lastUpdate = millis();                                    // Обнуляем таймер
         if (hasmsg) {
           sendATCommand("AT+CMGDA=\"DEL READ\"", true);           // Удаляем все прочитанные сообщения
@@ -235,18 +272,18 @@ void loop() {
   if (SIM800.available())   {                   // Если модем, что-то отправил...
     digitalWrite(loadledpin, 1);
     _response = waitResponse();                 // Получаем ответ от модема для анализа
-    Serial.println("<< " + _response);                  // Если нужно выводим в монитор порта
+    Serial.println("<< " + _response);          // Если нужно выводим в монитор порта
     // ... здесь можно анализировать данные полученные от GSM-модуля
 
 
-    if (_response.indexOf("+CMTI:")>-1) {             // Пришло сообщение об отправке SMS
+    if (_response.indexOf("+CMTI:") > -1) {           // Пришло сообщение об отправке SMS
       lastUpdate = millis() -  updatePeriod;          // Теперь нет необходимости обрабатываеть SMS здесь, достаточно просто
-                                                      // сбросить счетчик автопроверки и в следующем цикле все будет обработано
+      // сбросить счетчик автопроверки и в следующем цикле все будет обработано
     }
 
 
     if (_response.startsWith("RING")) {         // Есть входящий вызов
-      sendATCommand("ATH", true);               // Отклоняем вызов
+      //sendATCommand("ATH", true);               // Отклоняем вызов
       int phoneindex = _response.indexOf("+CLIP: \"");// Есть ли информация об определении номера, если да, то phoneindex>-1
       String innerPhone = "";                   // Переменная для хранения определенного номера
       if (phoneindex >= 0) {                    // Если информация была найдена
@@ -256,15 +293,20 @@ void loop() {
       }
       // Проверяем, чтобы длина номера была больше 6 цифр, и номер должен быть в списке
       if (innerPhone.length() >= 7 && whiteListPhones.indexOf(innerPhone) >= 0) {
+        sendATCommand("ATA", true);
+        ledPower(1);
         ring = true;
-            sendSMS((String)"Voltage: " + voltage_measure() + "%(" + voltage + "v),"
-                 + " RSSI: " + rssi()
-                 + ", Up time: " + uptime()
-                 + ", GPS: " + getAGPS());
+        //sendSMS((String)"Voltage: " + voltage_measure() + "%(" + voltage + "v),"
+        //        + " RSSI: " + rssi()
+        //        + ", Up time: " + uptime());
+      } else {
+        sendATCommand("ATH", true);
       }
-      
     }
 
+    if (_response.startsWith("NO CARRIER")) {
+      ledPower(0);
+    }
 
     if (_response.startsWith("+CMGS:")) {       // Пришло сообщение об отправке SMS
       int index = _response.lastIndexOf("\r\n");// Находим последний перенос строки, перед статусом
@@ -273,26 +315,22 @@ void loop() {
 
       if (result == "OK") {                     // Если результат ОК - все нормально
         Serial.println ("Message was sent. OK");
-      }
-      else {                                    // Если нет, нужно повторить отправку
+      } else {                                    // Если нет, нужно повторить отправку
         Serial.println ("Message was not sent. Error");
       }
     }
 
-
     digitalWrite(loadledpin, 0);
   }
+
   if (Serial.available())  {                    // Ожидаем команды по Serial...
     SIM800.write(Serial.read());                // ...и отправляем полученную команду модему
   };
 
-
-
   if (!digitalRead(button)) {
     Serial.println("Butt1 pressed");
     digitalWrite(loadledpin, 1);
-    ledStatus = !ledStatus;
-    digitalWrite(ledpin, ledStatus);
+    ledPower(!ledStatus);
 
     String msg = (String) "Voltage: " + voltage_measure() + "%(" + voltage + "v),"
                  + " RSSI: " + rssi()
